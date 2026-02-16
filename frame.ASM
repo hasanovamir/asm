@@ -12,10 +12,7 @@ Start:
 
 	mov di, 0	  ; pos in str
 
-	mov dx, 6
-	mov cx, 5
-	mov al, '$'
-	mov bl, 07
+	call read_frame_params
 
 	call print_frame
 
@@ -112,6 +109,8 @@ print_vertical_border		proc
 ;		 bl     = color
 ;destroy : si
 ;————————————————————————————————————————————————————————————————————————————————
+
+;————————————————————————————————————————————————————————————————————————————————
 print_frame	proc
 
 	push cx ; save hight
@@ -141,16 +140,100 @@ print_frame	proc
 
 read_frame_params	proc
 
-	mov cl, ds:[80h]
-	cmp cl, 0
-	je no_params
+	mov cx, ds:[80h] ; mov params len to cx
+	cmp cx, 0
+	je no_len
 
-	mov al, ds[82h]
+	call take_usr_str_len
 
+	mov dx, ax ; len that use user
 
-	no params:
+	cmp cx, 5  ; no user sym
+	jb no_sym
+
+	mov ax, ds:[85h]
+
+	cmp cx, 8h  ; if
+	jb no_sym
+
+	call take_frame_color
+
+	jmp end_frame_params
+
+	no_len:
+		mov dx, 20d
+	no_sym:
 		mov al, '$'
-		mov bl, 07
+	no_color:
+		mov bl, 07h
+	
+	end_frame_params:
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+
+;————————————————————————————————————————————————————————————————————————————————
+;Take str len that user given to prog
+;Enter   : nothing
+;return  : ax = usr_str_len
+;destroy : bx
+;————————————————————————————————————————————————————————————————————————————————
+take_usr_str_len	proc
+	
+	xor ax, ax; clean ax
+
+	mov al, ds:[82h]
+	sub al, '0'
+
+	mov bl, ds:[83h]
+	sub bl, '0'
+
+	mul 0ah
+	add al, bl
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+
+;————————————————————————————————————————————————————————————————————————————————
+;Take frame color
+;Enter   : nothing
+;return  : bl = color
+;destroy : si
+;————————————————————————————————————————————————————————————————————————————————
+
+;————————————————————————————————————————————————————————————————————————————————
+take_frame_color	proc
+
+	mov bx, ds:[87h]
+	mov si, ds:[88h]
+
+	cmp bx, 9    ; if first = num or alpha
+	ja first_hex ; if first = alpha
+
+	sub bx, '0'  ; '9' - '0' for take num
+
+	first_hex:
+
+		sub bx, 'A' ; 'B' - 'A' = 1 
+		add bx, 10d  ; + 10 = 11
+
+	cmp si, 9     ; if second = num or alpha
+	ja second_hex ; if second = alpha
+
+	sub si, '0'
+
+	second_hex:
+
+		sub si, 'A'
+		add si, 10d
+
+	shl bx, 4 ; == * 16
+
+	add bx, si ; now we got hex num
 
 	ret
 	endp
