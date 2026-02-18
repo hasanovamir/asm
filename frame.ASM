@@ -3,16 +3,20 @@
 
 org 100h
 
-STR_SIZE equ 160d
+STR_SIZE  equ 160d
+VIDEO_MEM equ 0b800h
 
 ;————————————————————————————————————————————————————————————————————————————————
 Start:	
-	mov ax, 0b800h; start of video mem
+
+;start of video mem
+	mov ax, VIDEO_MEM
 	mov es, ax
 
-	mov di, 0	  ; pos in str
+;start pos on the screen
+	mov di, 0
 
-	call read_frame_params
+	call read_frame_params	
 
 	call print_frame
 
@@ -33,10 +37,11 @@ Start:
 ;————————————————————————————————————————————————————————————————————————————————
 print_horizontal_border		proc
 
+; make offset to new str in si
 	mov si, STR_SIZE
 	shl cx, 1
 	sub si, cx
-	shr cx, 1         ; make offset to new str in si
+	shr cx, 1
 
 	horizontal_border_iteration:
 
@@ -74,7 +79,7 @@ print_vertical_border		proc
 	sub si, dx	     ; si = offset to and of str
 	sub si, 4		 ; 2 symbols from border (left and right)
 
-	vertical_border_iteration:
+	@@vertical_border_iteration:
 
 		mov byte ptr es:[di],   al ;print first symbol
 		mov byte ptr es:[di+1], bl
@@ -90,9 +95,9 @@ print_vertical_border		proc
 
 		dec cx
 
-		jnz vertical_border_iteration
+		jnz @@vertical_border_iteration
 		
-	shr dl, 1
+	shr dx, 1
 
 	ret
 	endp
@@ -101,7 +106,6 @@ print_vertical_border		proc
 
 ;————————————————————————————————————————————————————————————————————————————————
 ;Print full frame
-;Print vertical frame borders 
 ;Entry : es:di -> start of border
 ;		 dl     = string length
 ;		 cx		= border highth
@@ -113,61 +117,85 @@ print_vertical_border		proc
 ;————————————————————————————————————————————————————————————————————————————————
 print_frame	proc
 
-	push cx ; save hight
+;save hight
+	mov bp, cx
 
+;print_horizontal_border take str_len in cx
+;add 2 to str_len because we have 2 symbols in frame border
 	mov cx, dx
-
-	add cx, 2 ; symbols from vertical border
-
-	call print_horizontal_border
-
-	pop cx
-
-	call print_vertical_border
-
-	mov cx, dx
-
 	add cx, 2
 
 	call print_horizontal_border
 
-	pop cx
+;return frame hight to cx
+	mov cx, bp
+
+	call print_vertical_border
+
+;print_horizontal_border take str_len in cx
+;add 2 to str_len because we have 2 symbols in frame border
+	mov cx, dx
+	add cx, 2
+
+	call print_horizontal_border
+
+;return cx
+	mov cx, bp
 
 	ret
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
 
+;————————————————————————————————————————————————————————————————————————————————
+;Read frame params from terminal
+;Entre:   -
+;Return:  cl = len of input terminal string (with all params)
+;		  ax = symbol
+;		  bx = color
+;Destroy: -
+;————————————————————————————————————————————————————————————————————————————————
 read_frame_params	proc
+mov cx, bp
 
-	mov cx, ds:[80h] ; mov params len to cx
+	call print_vertical_border
+;clean cx
+	xor cx, cx
+
+;mov params len to cx
+	mov cl, ds:[80h]
+
+;user given zero params
 	cmp cx, 0
-	je no_len
+	je @@no_len
 
 	call take_usr_str_len
 
-	mov dx, ax ; len that use user
+;len that use user
+	mov dx, ax
 
-	cmp cx, 5  ; no user sym
-	jb no_sym
+;no user sym
+	cmp cx, 5
+	jb @@no_sym
 
 	mov ax, ds:[85h]
 
-	cmp cx, 8h  ; if
-	jb no_sym
+	cmp cx, 8h
+	jb @@no_sym
 
 	call take_frame_color
 
-	jmp end_frame_params
+	jmp @@end_frame_params
 
-	no_len:
+	@@no_len:
 		mov dx, 20d
-	no_sym:
+		mov cx, 10d
+	@@no_sym:
 		mov al, '$'
-	no_color:
+	@@no_color:
 		mov bl, 07h
 	
-	end_frame_params:
+	@@end_frame_params:
 
 	ret
 	endp
@@ -175,22 +203,29 @@ read_frame_params	proc
 ;————————————————————————————————————————————————————————————————————————————————
 
 ;————————————————————————————————————————————————————————————————————————————————
-;Take str len that user given to prog
+;Take str len t	hat user given to prog
 ;Enter   : nothing
 ;return  : ax = usr_str_len
 ;destroy : bx
 ;————————————————————————————————————————————————————————————————————————————————
 take_usr_str_len	proc
-	
-	xor ax, ax; clean ax
 
+; clean ax
+	xor ax, ax
+
+;take first symbol
 	mov al, ds:[82h]
 	sub al, '0'
 
+;multiplication first digit to ten
+	mov bl, 0ah
+	mul bl
+
+;take second sym
 	mov bl, ds:[83h]
 	sub bl, '0'
 
-	mul 0ah
+;10a + b
 	add al, bl
 
 	ret
@@ -211,33 +246,52 @@ take_frame_color	proc
 	mov bx, ds:[87h]
 	mov si, ds:[88h]
 
-	cmp bx, 9    ; if first = num or alpha
-	ja first_hex ; if first = alpha
+;first = num or alpha
+	cmp bx, 9
+	ja @@first_hex
 
-	sub bx, '0'  ; '9' - '0' for take num
+;'9' - '0' for take num
+	sub bx, '0'
+	jmp @@second
 
-	first_hex:
+	@@first_hex:
 
-		sub bx, 'A' ; 'B' - 'A' = 1 
-		add bx, 10d  ; + 10 = 11
+;hex -> d
+		sub bx, 'A'
+		add bx, 10d
 
-	cmp si, 9     ; if second = num or alpha
-	ja second_hex ; if second = alpha
+	@@second:
 
-	sub si, '0'
+		cmp si, 9
+		ja @@second_hex
 
-	second_hex:
+		sub si, '0'
+		jmp @@final_add
+
+	@@second_hex:
 
 		sub si, 'A'
 		add si, 10d
 
-	shl bx, 4 ; == * 16
+	@@final_add:
 
-	add bx, si ; now we got hex num
+; == * 16
+	shl bx, 4
+
+	add bx, si
 
 	ret
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
 
+;————————————————————————————————————————————————————————————————————————————————
+;Get string (that will be printed) length
+;Enter:  cl = len of "dirty" string
+;Return: ch = len of "clean" string
+;————————————————————————————————————————————————————————————————————————————————
+
+get_string_length	proc
+
+	
 end		Start
