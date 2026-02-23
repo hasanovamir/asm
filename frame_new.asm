@@ -24,6 +24,7 @@ org 100h
 STR_SIZE          equ 160d
 VIDEO_MEM         equ 0b800h
 TERMINAL_DATA_SEG equ 80h
+NUM_PARAMS        equ 13
 
 ;————————————————————————————————————————————————————————————————————————————————
 Start:	
@@ -40,11 +41,113 @@ Start:
 	int 21h
 
 ;————————————————————————————————————————————————————————————————————————————————
+;Count number of lines by length and \n symbols
+
+;Enter  : dl = string to print length
+
+;Return : dh = num of lines
+;         si = input string length
+
+;Destroy: ax, cx, si
+;————————————————————————————————————————————————————————————————————————————————
+
+count_lines     proc
+
+;skip params iterations count
+    mov dh, NUM_PARAMS
+
+;start pos in input data
+    mov cx, TERMINAL_DATA_SEG
+    add cx, 1
+
+    @@skip_params:
+
+        call take_regular_parameter
+
+;iterations count--
+        dec dh
+
+        cmp dh, 0
+        ja @@skip_params
+
+    call skip_space
+
+    xor dh, dh
+
+;si == input data size
+    mov si, ds:[TERMINAL_DATA_SEG]
+
+;si == input string size
+    add si, 80h
+    sub si, cx
+
+    cmp si, 0
+    je @@end_lines_counter
+
+    @@count_iter:
+
+        mov al, ds:[cx]
+
+        cmp al, '\'
+        je @@n_str_sym
+
+    @@regular_symbol:
+
+        mov al, ds:[cx]
+
+;num of iterations--
+        dec bx
+
+;pos in current str++
+        inc ah
+
+;pos in ds++
+        inc cx
+
+;pos in current str = str_len -> lines++
+        cmp ah, dl
+        je @@new_str
+        jmp @@count_iter
+
+    @@n_str_sym:
+
+        mov al, ds:[cx+1]
+        cmp al, 'n'
+        jne @@regular_symbol
+
+;pos in input string += 2
+        add cx, 2
+
+    @@new_str:
+
+;lines++
+            inc dh
+
+;num of symbols in current string
+            mov ah, 0
+
+    @@end_lines_counter:
+
+;add not full last str
+        cmp ah, 0
+        je @@ret_lines
+
+        inc dh
+
+    @@ret_lines::
+
+    ret
+    endp
+
+;————————————————————————————————————————————————————————————————————————————————
 ;Print the specified character in the specified place
+
 ;Enter  : al = symbol
 ;         ah = color of symbol
 ;         cx = pos on the screen
+
 ;Return : cx = incremented pos
+
 ;Destroy: -
 ;————————————————————————————————————————————————————————————————————————————————
 
@@ -82,13 +185,16 @@ print_line  proc
         mov ah, dh
 
 ;take regular symbol
-        mov bl, ds:[bx]
+        mov al, ds:[bx]
 
 ;symbol == '\'
         cmp al, '\'
         je @@comp_new_str
 
     @@regular_sym:
+
+;take regular symbol
+        mov al, ds:[bx]
 
 ;pos in ds++
         inc bx
@@ -124,13 +230,22 @@ print_line  proc
 ;skip \n symbol
         add bx, 2
 
-        mov ax, bp
+        @@fill_by_spaces:
+
+;print space
+            mov al, ' '
+            mov ah, dh
+            call put_char
+;num of printed symbols++
+            inc bp
+;cmp printed symbol with num of symbols that need to print
+            mov ax, bp
+            cmp al, dl
+            jb @@fill_by_spaces
 
 ;al == flag about \n
 ;al == 1 if that was \n else al == 0
         mov al, 1
-
-        jmp @@print_line_end
 
     @@print_line_end:
 
@@ -182,14 +297,16 @@ print_horizontal_border		proc
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
-
-;————————————————————————————————————————————————————————————————————————————————
 ;Print vertical frame borders 
+
 ;Entry : es:di -> start of border
 ;		 dl     = string length
 ;		 dh		= border highth
 ;		 bl     = symbol to print
 ;		 bh     = color
+
+;Return : -
+
 ;destroy : si, cx, ax
 ;————————————————————————————————————————————————————————————————————————————————
 
@@ -243,18 +360,19 @@ print_vertical_border		proc
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
-
-;————————————————————————————————————————————————————————————————————————————————
 ;Print full frame
+
 ;Entry : es:di -> start of border
 ;		 dl     = string length
 ;		 dh		= border highth
 ;		 bl     = symbol to print
 ;		 bh     = color
-;destroy : si, cx, ax
+
+;Return : -
+
+;Destroy: si, cx, ax
 ;————————————————————————————————————————————————————————————————————————————————
 
-;————————————————————————————————————————————————————————————————————————————————
 print_frame	proc
 
 	mov di, 0
@@ -269,11 +387,12 @@ print_frame	proc
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
-
-;————————————————————————————————————————————————————————————————————————————————
 ;Get string (that will be printed) length
+
 ;Enter  : cl = len of "dirty" string
+
 ;Return : cx = len of "clean" string
+
 ;Destroy: ax
 ;————————————————————————————————————————————————————————————————————————————————
 
@@ -298,10 +417,12 @@ get_string_length	proc
 
 ;————————————————————————————————————————————————————————————————————————————————
 ;Print input string
-;Enter  : cx = str_len
-;Return : -
-;Destroy: ax, si, cx, di
 
+;Enter  : cx = str_len
+
+;Return : -
+
+;Destroy: ax, si, cx, di
 ;————————————————————————————————————————————————————————————————————————————————
 
 print_text	proc
@@ -393,8 +514,6 @@ print_text	proc
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
-
-;————————————————————————————————————————————————————————————————————————————————
 ;Take regular symbol from ds and inc pos if sym == space
 ;Enter  : cx = pos in str
 ;Return : ax = new pos in str, after skipping spaces
@@ -426,12 +545,13 @@ skip_space	proc
 	endp
 
 ;————————————————————————————————————————————————————————————————————————————————
-
-;————————————————————————————————————————————————————————————————————————————————
 ;translate str to int (digit and hex)
+
 ;Enter  : cx = pos in (terminal) str
+
 ;Return : ax = parameter
 ;		: cx = new pos in str
+
 ;Destroy: ax, bl, cx
 ;————————————————————————————————————————————————————————————————————————————————
 
@@ -482,7 +602,7 @@ take_regular_parameter	proc
 ;ab = 10a + b
 		add ax, bl
 
-		jmp 
+		jmp @@count_iter
 
 	@@end_next_params:
 
