@@ -28,6 +28,9 @@ NUM_PARAMS        equ 13
 NUM_SYM_PARAMS    equ 9
 TERMINAL_HIGH     equ 25
 NUM_TICS		  equ 200
+DELAY_TO_ALPHA    equ 1500
+DELAY_TO_SPACE    equ 1
+DELAY_TO_FRAME    equ 5000
 
 ;————————————————————————————————————————————————————————————————————————————————
 Start:
@@ -49,7 +52,7 @@ interiorSYM_COLOR db 70
 	mov ax, VIDEO_MEM
 	mov es, ax
 
-	call print_frame
+	call make_beauty
 	call print_frame_text
 
 	mov ax, 4c00h	
@@ -284,7 +287,7 @@ print_line  proc
         inc bx
 
 		push si
-		mov si, 1500
+		mov si, DELAY_TO_ALPHA
 		call make_delay
 		pop si
 
@@ -329,7 +332,7 @@ print_line  proc
             mov ah, textCOLOR
 
 			push si
-			mov si, 1
+			mov si, DELAY_TO_SPACE
 			call make_delay
 			pop si
 
@@ -848,6 +851,120 @@ print_frame_text	proc
 	jmp @@text_iter
 
 	@@enp_print_text:
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;Print growing frame
+
+;Enter  : -
+
+;Return : -
+
+;Destroy: ax, bx, cx, dx, si, bp
+;————————————————————————————————————————————————————————————————————————————————
+
+make_beauty		proc
+
+	call take_frame_size
+
+	xor ax, ax
+	xor bx, bx
+
+	mov al, strLEN
+	mov bl, frameHIGH
+
+;save size
+	push ax
+	push bx
+
+;find needed params
+	cmp ax, bx
+	jae @@first_params
+	jb  @@second_params
+
+;ax >= bx
+	@@first_params:
+
+;cx = num of iterations
+		mov cx, bx
+
+;start frame length		
+		sub ax, bx
+
+;dl = num of sym those we add to strLEN
+;dh = num of sym those we add to frameHIGHT
+
+;al = (ax - bx) / bx
+		div bl
+
+		mov dl, al
+		mov dh, 1
+
+		mov strLEN, 0
+		mov frameHIGH, 0
+
+		jmp @@growing
+
+;ax < bx
+	@@second_params:
+
+;cx = num of iterations
+		mov cx, ax
+;start frame hight
+		sub bx, ax
+
+;dl = num of sym those we add to strLEN
+;dh = num of sym those we add to frameHIGHT
+
+;al = (bx - ax) / ax
+		mov dh, bl
+		mov bx, ax
+		mov ax, dx
+		div bl
+
+		mov dh, al
+		mov dl, 1
+
+		mov strLEN, 0
+		mov frameHIGH, 0
+
+	@@growing:
+
+		push si
+		mov si, DELAY_TO_FRAME
+		call make_delay
+		pop si
+
+;save cx and dx
+		push cx dx
+
+		call print_frame
+
+;retune dx and cx
+		pop dx cx
+
+		add strLEN, dl
+		add frameHIGH, dh
+
+		dec cx
+
+		cmp cx, 0
+		ja @@growing
+
+	pop ax
+	mov frameHIGH, al
+
+	pop ax
+	mov strLEN, al
+
+	push si
+	mov si, DELAY_TO_FRAME
+	call make_delay
+	pop si
+
+	call print_frame
 
 	ret
 	endp
