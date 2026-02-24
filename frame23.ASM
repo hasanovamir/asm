@@ -27,6 +27,7 @@ TERMINAL_DATA_SEG equ 80h
 NUM_PARAMS        equ 13
 NUM_SYM_PARAMS    equ 9
 TERMINAL_HIGH     equ 25
+NUM_TICS		  equ 200
 
 ;————————————————————————————————————————————————————————————————————————————————
 Start:
@@ -68,34 +69,22 @@ make_delay      proc
 ;save registers values
     push ax bx cx dx
 
-    mov ah, 0
-    int 1Ah
+    add bx, si
+	adc ax, 0
 
-    add dx, 18
+	@@norm_iter:
 
-    mov ax, cx
-    mov bx, dx
+		mov ax, NUM_TICS
 
-    @@wait_loop:
+		dec bx
+	
+		@@mini_iter:
+			dec ax
+			cmp ax, 0
+			ja @@mini_iter
 
-        mov ah, 0
-        int 1Ah
-
-;compare hight words
-        cmp cx, ax
-
-;not enough time passed
-        jb @@wait_loop
-;too much time passed
-        ja @@end_delay
-
-;compare low word
-        cmp dx, bx
-
-;not enough time passed
-        jb @@wait_loop
-
-    @@end_delay:
+		cmp bx, 0
+		ja @@norm_iter
 
 ;return previous registers values
     pop dx cx bx ax
@@ -294,6 +283,11 @@ print_line  proc
 ;pos in ds++
         inc bx
 
+		push si
+		mov si, 1500
+		call make_delay
+		pop si
+
         call put_char
 
 ;number of printed symbols++
@@ -333,6 +327,12 @@ print_line  proc
 ;print space
             mov al, ' '
             mov ah, textCOLOR
+
+			push si
+			mov si, 1
+			call make_delay
+			pop si
+
             call put_char
 ;num of printed symbols++
             inc bp
