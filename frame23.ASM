@@ -49,6 +49,7 @@ interiorSYM_COLOR db 70
 	mov es, ax
 
 	call print_frame
+	call print_frame_text
 
 	mov ax, 4c00h	
 	int 21h
@@ -108,7 +109,7 @@ make_delay      proc
 ;Enter  : -
 
 ;Return : bx = pos of start of input string
-;       : si = input_string size
+;		: ax = str len
 
 ;Destroy: ax, bx, cx, dl
 ;————————————————————————————————————————————————————————————————————————————————
@@ -116,7 +117,6 @@ make_delay      proc
 take_input_strlen      proc
 
 	call skip_all_params
-
 	call skip_space
 
 	xor ax, ax
@@ -126,12 +126,9 @@ take_input_strlen      proc
 
 ;si == input string size
 ;al = len of input data
-    add al, TERMINAL_DATA_SEG
+    add ax, TERMINAL_DATA_SEG + 1
 ;cl = pos = TERMINAL_DATA_SEG + len of params
-    sub al, bl
-	add al, 1
-
-	mov si, ax
+    sub ax, bx
 
     ret
     endp
@@ -139,7 +136,7 @@ take_input_strlen      proc
 ;————————————————————————————————————————————————————————————————————————————————
 ;Count number of lines by length and \n symbols
 
-;Enter  : dl = string to print length
+;Enter  : -
 
 ;Return : dh = num of lines
 ;         si = input string length
@@ -154,6 +151,8 @@ count_lines     proc
 
 ;min value, not empty frame
 	mov dh, 0
+
+	mov si, ax
 
     xor ax, ax
 
@@ -182,7 +181,7 @@ count_lines     proc
         inc bx
 
 ;pos in current str = strlen -> lines++
-        cmp ah, dl
+        cmp ah, strLEN
         je @@new_str
 
 		cmp si, 0
@@ -256,14 +255,24 @@ put_char    proc
 
 ;Enter  : di = pos on the screen
 ;       : bx = pos in ds (there we take a string)
+;		: si = pos of last symbol in ds
 
-;Return : dx = new pos on the screen
-;       : al = \n flag
+;Return : bx = new pos on the screen
 
-;Destroy: bp
+;Destroy: ax, cx, bp
 ;————————————————————————————————————————————————————————————————————————————————
 
 print_line  proc
+
+	xor bp, bp
+	xor ax, ax
+
+;ax = 2 * str_len
+	mov al, strLEN
+	shl ax, 1
+;cx = offset to new string == 160 - 2 * str_len
+	mov cx, STR_SIZE
+	sub cx, ax
 
     @@print_line_iteration:
 
@@ -289,6 +298,9 @@ print_line  proc
 
 ;number of printed symbols++
         inc bp
+
+		cmp bx, si
+		je @@fill_by_spaces
 
 ;bp haven`t low part so to cmp num of printed symbols and num of symbols that need to print we
 ;mov bp to ax, and then compare to make new iterations
@@ -329,11 +341,9 @@ print_line  proc
             cmp al, strLEN
             jb @@fill_by_spaces
 
-;al == flag about \n
-;al == 1 if that was \n else al == 0
-        mov al, 1
-
     @@print_line_end:
+
+	add di, cx
 
     ret
     endp
@@ -399,21 +409,7 @@ str_to_i	proc
 ;pos++
 		inc bx
 
-;jump if int hex
-		cmp dl, '9'
-		ja @@hex
-
-;'9'->9
 		sub dl, '0'
-		jmp @@count
-
-	@@hex:
-
-;hex->10th
-		sub dl, 'A'
-		add dl, 10
-
-	@@count:
 
 ;ax *= 10
 		mov cx, ax
@@ -427,6 +423,67 @@ str_to_i	proc
 		jmp @@count_iteration
 
 	@@end_next_params:
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;translate str to hex
+
+;Enter  : bx = pos in (terminal) str
+
+;Return : ax = parameter
+;		: bx = new pos in str
+
+;Destroy: ax, bx, cx, dl
+;————————————————————————————————————————————————————————————————————————————————
+
+str_to_hex	proc
+
+;skip spaces before new parameter
+	call skip_space
+
+;clean ax, bx to count
+	xor ax, ax
+	xor dl, dl
+
+	@@hex_count_iteration:
+
+;take next symbol
+		mov dl, ds:[bx]
+
+;jump to end if it space
+		cmp dl, ' '
+		je @@hex_end_next_params
+
+;pos++
+		inc bx
+
+;jump if int hex
+		cmp dl, '9'
+		ja @@hex
+
+;'9'->9
+		sub dl, '0'
+		jmp @@hex_count
+
+	@@hex:
+
+;hex->10th
+		sub dl, 'A'
+		add dl, 10
+
+	@@hex_count:
+
+;ax *= 16
+		shl ax, 4
+
+;ab = 10a + b
+		add al, dl
+
+		jmp @@hex_count_iteration
+
+	@@hex_end_next_params:
 
 	ret
 	endp
@@ -483,9 +540,9 @@ skip_all_params		proc
 		ja @@skip_symbols
 
 ;3 colors
-	call str_to_i
-	call str_to_i
-	call str_to_i
+	call str_to_hex
+	call str_to_hex
+	call str_to_hex
 
 	ret
 	endp
@@ -613,7 +670,10 @@ print_frame		proc
 	xor ax, ax
 	mov al, frameHIGH
 
+;num of iterations
 	mov bp, ax
+;2 empty str, highest asn lowest
+	add bp , 2
 	mov dh, interiorSYM_COLOR
 
 	@@print_line_iter:
@@ -667,13 +727,13 @@ take_colors		proc
 		cmp dx, 0
 		ja @@skip_symbols_iter
 
-	call str_to_i
+	call str_to_hex
 	mov frameCOLOR, al
 
-	call str_to_i
+	call str_to_hex
 	mov interiorSYM_COLOR, al
 
-	call str_to_i
+	call str_to_hex
 	mov textCOLOR, al
 
 	ret
@@ -716,10 +776,11 @@ take_frame_size		proc
 
 count_frame_start_pos		proc
 
-;al = (25 - high) / 2
+;al = (25 - high - 2) / 2
 	xor ax, ax
 	mov al, TERMINAL_HIGH
 	sub al, frameHIGH
+	sub al, 2
 	shr al, 1
 
 ;al = al * 160
@@ -737,6 +798,56 @@ count_frame_start_pos		proc
 	shl al, 1
 
 	add si, ax
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;Count start pos to print text in frame
+
+;Enter  : -
+
+;Return : si = pos
+
+;Destroy: ax
+;————————————————————————————————————————————————————————————————————————————————
+count_text_start_pos	proc
+
+	call count_frame_start_pos
+
+	add si, STR_SIZE
+	add si, STR_SIZE
+
+	add si, 4
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+
+print_frame_text	proc
+
+	call count_text_start_pos
+
+;start pos on the screen
+	mov di, si
+
+	call take_input_strlen
+
+	;si = last sym pos
+	mov si, ax
+	add si, bx
+
+	@@text_iter:
+	
+;bx == si == end
+	cmp bx, si
+	jae @@enp_print_text
+
+	call print_line
+	jmp @@text_iter
+
+	@@enp_print_text:
 
 	ret
 	endp
