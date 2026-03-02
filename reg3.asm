@@ -5,27 +5,31 @@ org 100h
 
 ;————————————————————————————————————————————————————————————————————————————————
 
-FRAME_LEN          equ 00A0h
-VIDEO_MEM          equ 0b800h
-TERMINAL_DATA_SEG  equ 80h
-NUM_PARAMS         equ 13d
-NUM_SYM_PARAMS     equ 9
-TERMINAL_HIGH      equ 25d
-STD_KEYBOARD_INT   equ 3509h
-KEYBOARD_OFFSET    equ 36d
-x_0				   equ 60d
-y_0				   equ 5
-STR_LEN            equ 9
-FRAME_HIGH   	   equ 12
-TEXT_COLOR 		   equ 07h 
-FRAME_COLOR 	   equ 15h
-INTERIOR_SYM_COLOR equ 1Eh
-
-;————————————————————————————————————————————————————————————————————————————————
-
 Start:
 
 	jmp Main
+
+;———————————————————————————CONSTANTS—————————————————————————————————————————————————————
+
+TERMINAL_LEN        equ 00A0h
+VIDEO_MEM           equ 0b800h
+TERMINAL_DATA_SEG   equ 80h
+NUM_PARAMS          equ 13d
+NUM_SYM_PARAMS      equ 9
+TERMINAL_HIGH       equ 25d
+STD_KEYBOARD_INT    equ 3509h
+KEYBOARD_OFFSET     equ 36d
+x_0				    equ 60d
+y_0				    equ 5
+STR_IN_FRAME_LEN    equ 9
+FRAME_LEN           equ 11
+FRAME_INTERIOR_HIGH equ 12
+FRAME_HIGH			equ 14
+TEXT_COLOR 		    equ 07h 
+FRAME_COLOR 	    equ 15h
+INTERIOR_SYM_COLOR  equ 1Eh
+
+;--------------------------------------------------
 
 REG_NAMES   db "ax = "
 			db "bx = "
@@ -40,7 +44,18 @@ REG_NAMES   db "ax = "
 			db "ds = "
 			db "es = "
 
-REG_VALUES dw 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 
+;——————————————————————VARIABLES AND ARRAYS———————————————————————————————————
+
+regVALUES dw 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 
+
+frameSTART_POS dw 0
+
+;array there we will make a frame
+frame_array dw 13 * 16 DUP (0)
+;array there we will save symbols under the frame
+save_array  dw 13 * 16 DUP (0)
+
+;————————————————————————————————————————————————————————————————————————————————
 
 	Main:
 
@@ -76,8 +91,6 @@ REG_VALUES dw 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 ;return opportunity to use another int
     sti
 
-	int 09h
-
 ;int 21h with ax == 3100h == leave and keep our program in memory
 ;in dx we put size of our program in 16 bytes blocks
     mov ax, 3100h
@@ -97,35 +110,59 @@ REG_VALUES dw 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 New09    proc
     
+;save previous ds in stack, because we destroy it	
 	push ds
+
+;put cs in ds to have an opportunity to
+;access to memory
 	push cs
 	pop ds
 
-;move ax bx cx dx si bp es di sp ip
+;move ax bx cx dx si bp es di sp ip in array
 	call save_registers
     
-    push 0b800h
+;put video_mem address to es to
+;have an opportunity to print symbols	
+    push VIDEO_MEM
     pop es
 
-	;in al, 60h
+;take a click
+	in al, 60h
 
-	;cmp al, 26
-	;jne @@end
+;if (key == '[') print_frame
+	cmp al, 26
+	je @@upd_screen
 
-	;cli
+;if (key == ']') return old terminal
+	cmp al, 27
+	je @@recover_screen
 
-    call print_frame
+	jmp @@end
 
-	;sti
+	@@upd_screen:
+
+		call make_frame_in_array
+		call update_screen
+
+		jmp @@end
+
+	@@recover_screen:
+
+		call recover_screen
 
 	@@end:
 
+;return registers values to registers from array
     call return_registers
 
+;return previous ds that we destroyed
 	pop ds
 
+;long jmp to default int 09h
     db 0eah
 
+;define variables that saves segment
+;and offset of old int 09h
 	old09ofs dw 0
     old09seg dw 0
 
@@ -156,124 +193,52 @@ put_char    proc
 
 ;————————————————————————————————————————————————————————————————————————————————
 ;Print frame line
-;It takes 7 params: start pos, STR_len, left symbol, middle, right, color of left and right sym, color of middle
 
-;Enter  : di bx = start pos on the screen
-;		: ch = left sym
-;		: cl = right sym
+;Enter  : di = start pos in frame_array
+;		: bh = left sym
+;		: bl = right sym
 ;		: dl = middle sym
-;		: dh = color of middle
 
-;Return : bx = new pos on the screen
+;Return : di = new pos on the screen
 
 ;Destroy: ax, si
 ;————————————————————————————————————————————————————————————————————————————————
 
 print_frame_line		proc
 
-;we save bp, because it will be iteration counter
-	push bp
+;clean older part of cx, because we will use loop
+	xor ch, ch
 
-;bp = str_len = num of iterations of printing 
-;interior symbol into the frame
-;we add 2 to bp, because we have a space before and
-;after the string
-	mov bp, STR_LEN + 2
+;iteration count
+	mov cl, STR_IN_FRAME_LEN
 
-;prepare to print left symbols (border part)
-;ch = left symbol of this line
-	mov ah, FRAME_COLOR
-	mov al, ch
+;print left sym
+	mov byte ptr frame_array[di], bh
+	mov byte ptr frame_array[di + 1], FRAME_COLOR
 
-;print left sym and inc di == pos on the screen
-	call put_char
+;inc di to 1 sym == 2 bytes
+	add di, 2
 
-;middle sym
-;dh = color of middle sym
+;ax = middle sym + color, we will print ax
 ;dl = middle sym
-	mov ah, dh
+	mov ah, FRAME_COLOR
 	mov al, dl
 
 	@@frame_line_iter:
 
-;print sym, inc di, dec iteration count
-		call put_char
-		dec bp
+;print middle sym to frame in array
+		mov word ptr frame_array[di], ax
+;increase pos in array
+		add di, 2
 
-		cmp bp, 0
-		ja @@frame_line_iter
-
-;cl = right sym
-	mov ah, FRAME_COLOR
-	mov al, cl
+		loop @@frame_line_iter
 
 ;print right sym
-	call put_char
+	mov byte ptr frame_array[di], bl
+	mov byte ptr frame_array[di + 1], FRAME_COLOR
 
-;go to new line
-;si = offset to first element in the frame on the next line
-	add di, si
-
-;return bp
-	pop bp
-
-	ret
-	endp
-
-;————————————————————————————————————————————————————————————————————————————————
-;Print full frame
-
-;Enter  : -
-
-;Return : -
-
-;Destroy: ax, bx, cx, dx, si, bp
-;————————————————————————————————————————————————————————————————————————————————
-
-print_frame		proc
-
-	call count_frame_start_pos
-	call count_frame_line_offset
-
-	mov ch, 201
-	mov dl, 205
-	mov cl, 187
-
-;color of middle part
-	mov dh, FRAME_COLOR
-
-	call print_frame_line
-
-	mov ch, 186
-	mov dl, '#'
-	mov cl, 186
-
-	xor ax, ax
-	mov al, FRAME_HIGH
-
-;num of iterations
-	mov bx, ax
-;2 empty str, highest asn lowest
-	add bx , 2
-	mov dh, INTERIOR_SYM_COLOR
-
-	@@print_line_iter:
-
-		call print_frame_line
-		dec bx
-
-		cmp bx, 0
-		ja @@print_line_iter
-
-	mov ch, 200
-	mov dl, 205
-	mov cl, 188
-
-	mov dh, FRAME_COLOR
-
-	call print_frame_line
-
-	call print_frame_text
+;inc di to 1 sym == 2 bytes
+	add di, 2
 
 	ret
 	endp
@@ -284,6 +249,7 @@ print_frame		proc
 ;Enter  : x_0, y_0
 
 ;Return : di = pos
+;		: frameSTART_POS = pos
 
 ;Destroy: ax
 ;————————————————————————————————————————————————————————————————————————————————
@@ -296,13 +262,13 @@ count_frame_start_pos		proc
 
 ;ax = start_line
 ;di = start_line
-	mov ax, y_o
-	mov di, y_o
+	mov ax, y_0
+	mov di, y_0
 ;ax *= 32
 	shl ax, 5
 ;di *= 128
 	shl di, 7
-;di = 160 * y_o
+;di = 160 * y_0
 ;di = offset to first line
 	add di, ax
 
@@ -310,6 +276,10 @@ count_frame_start_pos		proc
 ;add 2 times because all sym take 2 bytes
 	add di, x_0
 	add di, x_0
+
+;save value in variable, because it will be used
+;when we will print registers values
+	mov frameSTART_POS, di
 
 	ret
 	endp
@@ -325,11 +295,12 @@ count_frame_start_pos		proc
 ;————————————————————————————————————————————————————————————————————————————————
 count_text_start_pos	proc
 
-;di = start pos of the frame, destroy ax
-	call count_frame_start_pos
+;value that we saved from count_frame_start_pos
+;pos of first frame sym (left top)
+	mov di, frameSTART_POS
 
 ;skip 2 lines, frame border symbol and space
-	add di, FRAME_LEN * 2 + 4
+	add di, TERMINAL_LEN * 2 + 4
 
 	ret
 	endp
@@ -338,7 +309,7 @@ count_text_start_pos	proc
 ;Count offset that need to add to pos on the screen
 ;to move to pos of first element in the frame on the next line
 
-;Enter  : FRAME_LEN = len of area to str in frame
+;Enter  : TERMINAL_LEN = len of area to str in frame
 
 ;Return : si = offset
 
@@ -350,23 +321,23 @@ count_frame_line_offset		proc
 ;clear ax, to count offset to new str
 	xor ax, ax
 
-;we will save offset in si, but FRAME_LEN is a byte const,
-;and si haven`t low part, so we put FRAME_LEN in al and clean ah
+;we will save offset in si, but TERMINAL_LEN is a byte const,
+;and si haven`t low part, so we put TERMINAL_LEN in al and clean ah
 ;to put it in si
-	mov al, FRAME_LEN
+	mov al, TERMINAL_LEN
 
 ;put 160d in si
 	mov si, ax
 
 ;put len of area to string in frame in al
-	mov al, STR_LEN
+	mov al, STR_IN_FRAME_LEN
 
 ;it takes 2 bytes to print 1 sym, so 
 ;we multiplicate len of area to str to 2,
 ;to skip len of area symbols
 	shl al, 1
 
-;160d - str_len
+;160d - str_IN_FRAME_len
 	sub si, ax
 ;we have 2 extra symbols on both sides
 ;frame sym and space, so we have 4 extra sym = 8 bytes 
@@ -383,17 +354,13 @@ count_frame_line_offset		proc
 
 ;Return : di = new pos on the screen
 
-;Destroy: ax, bx, cx
+;Destroy: ax, bx, dx, cx
 ;————————————————————————————————————————————————————————————————————————————————
 
 print_register_value proc
 
-;save previous value of cx, because it used 
-;like iteration count in print frame
-	push cx
-
 ;we need to take 4 digits, so we need 4 iterations
-    mov cx, 4
+    mov dx, 4
 
 	@@convert_loop:
 
@@ -427,15 +394,15 @@ print_register_value proc
 	mov bh, TEXT_COLOR
     
 ;print symbol
-	mov word ptr es:[di], bx
+	mov word ptr frame_array[di], bx
 ;inc pos on the screen
 	add di, 2
+;down size num of iterations
+	dec dx
 
 ;repeat it 4 times to print all register
-    loop @@convert_loop
-
-;return value of cx to print frame
-	pop cx
+	cmp dx, 0
+	ja @@convert_loop
 
     ret
 	endp
@@ -452,16 +419,24 @@ print_register_value proc
 
 print_frame_text 	proc
 
-;di = start pos to print text, ax - destroyed
-	call count_text_start_pos
+;count start pos in frame_array
+;it will be 2 line 2 column
+;--------------------------------------------------
 
-;si = offset, but in contain 4 extra sym, so we need
-;to add 8 to si. destroy ax
-	call count_frame_line_offset
-	add si, 8
+;clean older part of ax
+	xor ah, ah
 
-;save offset in dx, because si will be destroyed
-	mov dx, si
+;al = len of area to text
+	mov al, STR_IN_FRAME_LEN
+
+;si = 2 * str_IN_FRAME_len
+	mov di, ax
+	shl di, 1
+
+;2 symbols in first line, and 1 frame sym
+	add di, 6
+
+;--------------------------------------------------
 
 	xor cx, cx
 	xor bp, bp
@@ -473,19 +448,20 @@ print_frame_text 	proc
 		call print_reg_name
 
 ;it takes value in ax and print it in terminal
-		mov ax, REG_VALUES[bp]
+		mov ax, regVALUES[bp]
 		call print_register_value
 
-;goto next line
-		add di, dx
 ;inc num of cur reg
+;cx = num of cur line == num of cur register
+;bp == address of value of cur register in regVALUES
 		inc cx
 		add bp, 2
+
+		add di, 4
 
 		cmp cx, 12
 		jb @@print_iter
 
-	
 	ret
 	endp
 
@@ -501,18 +477,18 @@ print_frame_text 	proc
 
 save_registers		proc
 
-	mov REG_VALUES[0], ax
-	mov REG_VALUES[2], bx
-	mov REG_VALUES[4], cx
-	mov REG_VALUES[6], dx
-	mov REG_VALUES[8], si
-	mov REG_VALUES[10], di
-	mov REG_VALUES[12], bp
-	mov REG_VALUES[14], sp
-	mov REG_VALUES[22], es
+	mov regVALUES[0], ax
+	mov regVALUES[2], bx
+	mov regVALUES[4], cx
+	mov regVALUES[6], dx
+	mov regVALUES[8], si
+	mov regVALUES[10], di
+	mov regVALUES[12], bp
+	mov regVALUES[14], sp
+	mov regVALUES[22], es
 
 ;we add 10 because is stake cx, ip, ret address, ds, flags = 10 bytes
-	add REG_VALUES[14], 10
+	add regVALUES[14], 10
 
 ;we will take reg values from stack
 ;--------------------------------------------------
@@ -529,21 +505,21 @@ save_registers		proc
 
 ;take ds from stack and save in array
     mov ax, [bp+2]
-    mov REG_VALUES[20], ax
+    mov regVALUES[20], ax
 
 ;take ip from stack and save in array
     mov ax, [bp+4]
-    mov REG_VALUES[16], ax
+    mov regVALUES[16], ax
 
 ;take cs from stack and save in array
     mov ax, [bp+6]
-    mov REG_VALUES[18], ax
+    mov regVALUES[18], ax
 
 ;--------------------------------------------------
 
 ;return destroyed registers
-    mov ax, REG_VALUES[0]
-    mov bp, REG_VALUES[12]
+    mov ax, regVALUES[0]
+    mov bp, regVALUES[12]
 
 	ret
 	endp
@@ -556,7 +532,7 @@ save_registers		proc
 
 ;Return : di = new pos on the screen
 
-;Destroy: bx, si
+;Destroy: bx, dx, si
 ;————————————————————————————————————————————————————————————————————————————————
 
 print_reg_name proc
@@ -566,26 +542,29 @@ print_reg_name proc
 
 ;bl = num of cur str
     mov bl, al
+
 ;bl = num of cur str * 5
 ;because all strings have size of 5 bytes
+;--------------------------------------------------	
+
     mov si, bx
 ;bx *= 4
 	shl bx, 2
 ;bx += bx
 	add bx, si
-    
+
+;--------------------------------------------------
+
 ;take address of cur str and put it to si
     lea si, REG_NAMES[bx] 
 
 ;put color of text to ah, to print ax
     mov ah, TEXT_COLOR
 
-;save cx to make a cycle
-	push cx
-
 ;5 symbols in all str 
-	mov cx, 5
+	mov dx, 5
 
+;print symbols
 ;--------------------------------------------------
 
 	@@print_reg_str_iter:
@@ -593,17 +572,18 @@ print_reg_name proc
 ;take next sym from str
 		mov al, [si]
 ;print sym
-		mov es:[di], ax
-;inc pos on the screen
+		mov frame_array[di], ax
+;inc pos in frame_array
 		add di, 2
 ;inc pos in cur str
 		inc si
+;down size num of iterations
+		dec dx
 
-		loop @@print_reg_str_iter
+		cmp dx, 0
+		ja @@print_reg_str_iter
 
 ;--------------------------------------------------
-
-	pop cx
 
     ret
 	endp
@@ -612,15 +592,294 @@ print_reg_name proc
 
 return_registers		proc
 
-	mov ax, REG_VALUES[0]
-	mov bx, REG_VALUES[2]
-	mov cx, REG_VALUES[4]
-	mov dx, REG_VALUES[6]
-	mov si, REG_VALUES[8]
-	mov di, REG_VALUES[10]
-	mov bp, REG_VALUES[12]
-	mov es, REG_VALUES[22]
-	mov ds, REG_VALUES[20]
+	mov ax, regVALUES[0]
+	mov bx, regVALUES[2]
+	mov cx, regVALUES[4]
+	mov dx, regVALUES[6]
+	mov si, regVALUES[8]
+	mov di, regVALUES[10]
+	mov bp, regVALUES[12]
+	mov es, regVALUES[22]
+	mov ds, regVALUES[20]
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;make frame if frame_array
+
+;Enter  : -
+
+;Return : -
+
+;Destroy: ax, bx,cx, dl, di
+;————————————————————————————————————————————————————————————————————————————————
+
+make_frame_in_array		proc
+
+;count frame start pos in terminal and put it in variable
+	call count_frame_start_pos
+
+;di = 0 == start pos in frame_array
+	xor di, di
+
+;beautiful symbols, that will be part of frame border
+	mov bh, 201
+	mov dl, 205
+	mov bl, 187
+
+	call print_frame_line
+
+;print semi-empty lines, where will be text
+;--------------------------------------------------
+
+;prepare frame sym
+	mov bl, 186
+	mov bh, FRAME_COLOR
+
+;num of iterations
+	xor cx, cx
+	mov cl, FRAME_INTERIOR_HIGH
+
+	@@print_line_iter:
+
+;print left frame sym
+		mov word ptr frame_array[di], bx
+
+;add to pos 2 bytes == left frame sym
+;add to pos STR_IN_FRAME_LEN * 2 == skip area, where will
+;be registers values
+		add di, 2 + STR_IN_FRAME_LEN * 2
+
+;print right frame sym
+		mov word ptr frame_array[di], bx
+
+;inc pos, frame right sym == 2 bytes
+		add di, 2
+
+		loop @@print_line_iter
+
+;--------------------------------------------------
+
+;print last line, bot border
+
+;beautiful symbols, that will be part of frame border
+	mov bh, 200
+	mov dl, 205
+	mov bl, 188
+
+	call print_frame_line
+
+	call print_frame_text
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;print if frame new register values
+;we always rewrite registers values to frame array,
+;because it have the same num of access to mem, but it have
+;less num of instructions, so it would be faster
+;as a bonus it isn`t ruin conveyor belt
+
+;Enter  : -
+
+;Return : -
+
+;Destroy: ax, bx, cx, dx, bp, di
+;————————————————————————————————————————————————————————————————————————————————
+
+update_frame_array		proc
+
+;num of registers, num of iterations
+	mov cx, 12
+
+;start pos in regVALUES array
+	mov bp, 0
+
+;count pos in frame_array of first register value
+;2 line, 7 column
+	mov di, (11 + 6) * 2 
+
+	@@update_iter:
+
+;it takes value in ax and print it in terminal
+		mov ax, regVALUES[bp]
+		call print_register_value
+
+;take next register value
+		add bp, 2
+;goto next line	
+		add di, 11 * 2 - 8
+
+		loop @@update_iter
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;compare element from frame_array and terminal
+;if the different, sym in terminal -> save_buffer,
+;sym in frame_array -> terminal, so we always save the screen
+
+;Enter  : -
+
+;Return : updated frame_array
+;		: updated save_array
+
+;Destroy: ax, bx, cx, dx, bp, di, es
+;————————————————————————————————————————————————————————————————————————————————
+
+update_screen		proc
+
+;put new registers values in frame array
+	call update_frame_array
+
+;---------------README-----------------------------
+;bx == pos in save and frame arrays
+;di == pos in terminal
+;si == offset to new line in terminal
+;--------------------------------------------------
+
+;put to es address of video mem to have 
+;an opportunity to access to video mem
+	mov ax, VIDEO_MEM
+	mov es, ax
+
+;preparing constants
+;bx = 0
+	xor bx, bx
+;di = pos of frame top left sym
+	mov di, frameSTART_POS
+;si = 160 - 11 * 2
+	mov si, TERMINAL_LEN - FRAME_LEN * 2
+
+;num of iterations of processing lines
+	mov cx, FRAME_HIGH
+
+;processing of lines	
+;--------------------------------------------------
+
+	@@processing_lines:
+
+;num of processing symbols in every lines
+		mov dx, FRAME_LEN
+
+	;--------------------------------------------------
+
+		@@processing_sym:
+
+;compare sym in frame array and terminal
+;if the equal, we cmp colors, and if the 
+;are equal, we don`t copy sym from terminal to save _array 
+;and from frame_array to terminal
+
+			mov byte ptr ax, es:[di]
+
+			cmp frame_array[bx], ax
+			je @@skip_copying
+
+			@@copy:
+
+;mov sym from terminal to register, because
+;we can`t cmp mem-mem, only mem-rem/ reg-mem
+				mov ax, es:[di]
+
+				;terminal -> save_array
+				mov word ptr save_array[bx], ax
+				;frame_array -> terminal
+				mov word ptr ax, frame_array[bx]
+
+				mov es:[di], ax
+
+			@@skip_copying:
+
+;increase pos in arrays and terminal
+			add di, 2
+			add bx, 2
+
+;down size num of iterations in this line
+			dec dx
+
+			cmp dx, 0
+			ja @@processing_sym
+
+	;--------------------------------------------------
+
+;goto nest line in terminal
+		add di, si
+
+		loop @@processing_lines
+
+	ret
+	endp
+
+;————————————————————————————————————————————————————————————————————————————————
+;return symbols from save_array to terminal
+
+;Enter  : -
+
+;Return : default terminal
+
+;Destroy: ax, bx, cx, dx, bp, di, es
+;————————————————————————————————————————————————————————————————————————————————
+
+recover_screen		proc
+
+;---------------README-----------------------------
+;bx == pos in save arrays
+;di == pos in terminal
+;si == offset to new line in terminal
+;--------------------------------------------------
+
+;put to es address of video mem to have 
+;an opportunity to access to video mem
+	mov ax, VIDEO_MEM
+	mov es, ax
+
+;preparing constants
+;bx = 0
+	xor bx, bx
+;di = pos of frame top left sym
+	mov di, frameSTART_POS
+;si = 160 - 11 * 2
+	mov si, TERMINAL_LEN - FRAME_LEN * 2
+
+;num of iterations of processing lines
+	mov cx, FRAME_HIGH
+
+;processing of lines	
+;--------------------------------------------------
+
+	@@rec_processing_lines:
+
+;num of processing symbols in every lines
+		mov dx, FRAME_LEN
+
+	;--------------------------------------------------
+
+		@@rec_processing_sym:
+
+;save_array -> terminal
+			mov word ptr ax, save_array[bx]
+			mov word ptr es:[di], ax
+
+;increase pos in arrays and terminal
+			add di, 2
+			add bx, 2
+
+;down size num of iterations in this line
+			dec dx
+
+			cmp dx, 0
+			ja @@rec_processing_sym
+
+	;--------------------------------------------------
+
+;goto nest line in terminal
+		add di, si
+
+		loop @@rec_processing_lines
 
 	ret
 	endp
